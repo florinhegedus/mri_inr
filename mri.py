@@ -53,7 +53,7 @@ class MRI:
         voxel_size = [i * factor for i in self.voxel_size]
         lr = nibabel.processing.resample_to_output(hr, voxel_size)
         output_path = self.nii_file_path[:-7] + f"_downsample_factor_{factor}" + ".nii.gz"
-        logging.info(f"Saved downsampled MRI to {output_path}")
+        logging.info(f"Saving downsampled MRI to {output_path}")
         nibabel.save(lr, output_path)
     
     def __str__(self) -> str:
