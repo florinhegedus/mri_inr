@@ -1,3 +1,4 @@
 launch.json
 images/*
 *.pyc
+/notebooks/.ipynb_checkpoints
