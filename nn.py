@@ -1,59 +1,108 @@
+import numpy as np
 import torch
 import torch.nn as nn
 
 
 class NeuralNet(nn.Module):
-    def __init__(self, input_channels: int=256, hidden_layer_size: int=256, num_hidden_layers=3, output_channels=1):
+    def __init__(self, input_size=3, hidden_layer_size=256, num_hidden_layers=18, output_channels=1):
         super().__init__()
+
         self.hidden_layer_size = hidden_layer_size
 
         self.layers = []
 
         # First layer
-        self.layers.append(nn.Linear(input_channels, hidden_layer_size))
-        self.layers.append(nn.BatchNorm1d(hidden_layer_size))
-        self.layers.append(nn.ReLU())
+        self.initial_layer = nn.Sequential(
+            nn.Linear(input_size, hidden_layer_size),
+            nn.BatchNorm1d(hidden_layer_size),
+            nn.ReLU()
+        )
 
-        # Hidden layers
-        for _ in range(num_hidden_layers):
-            self.layers.append(nn.Linear(hidden_layer_size, hidden_layer_size))
-            self.layers.append(nn.BatchNorm1d(hidden_layer_size))
-            self.layers.append(nn.ReLU())
+        self.middle_layers = nn.ModuleList()
+        for i in range(1, num_hidden_layers + 1):
+            in_features = input_size + hidden_layer_size if i in [7, 13] else hidden_layer_size
+            out_features = hidden_layer_size
+            self.middle_layers.append(nn.Sequential(
+                nn.Linear(in_features, out_features),
+                nn.BatchNorm1d(out_features),
+                nn.ReLU()
+            ))
 
         # Last layer
-        self.layers.append(nn.Linear(hidden_layer_size, output_channels))
-        self.layers.append(nn.Sigmoid())
-
-        self.layers = nn.ModuleList(self.layers)
+        self.final_layer = nn.Linear(hidden_layer_size, output_channels)
 
     def forward(self, x):
-        out = fourier_feature_mapping(x)
-        for layer in self.layers:
+        skip_input = x
+        # Initial layer
+        out = self.initial_layer(x)
+
+        # Middle layers with skip connections
+        for i, layer in enumerate(self.middle_layers):
+            if i == 6:  # Skip connection after 6th layer
+                out = torch.cat((skip_input, out), dim=1)
+            elif i == 12:  # Skip connection after 12th layer
+                out = torch.cat((skip_input, out), dim=1)
             out = layer(out)
+
+        # Final layer
+        out = self.final_layer(out)
         return out
     
 
-def fourier_feature_mapping(P, L=128):
-    """
-    Applies Fourier feature mapping to one or more 3D points.
+class FourierFeatureMapping:
+    def __init__(self, num_frequencies, scale, device):
+        # Sample B from Gaussian distribution
+        self.B = torch.randn(num_frequencies, 3, device=device) * scale
 
-    This function maps each 3D point (or a batch of points) to a higher-dimensional
-    space using Fourier features. It's useful for encoding spatial information in neural networks.
+        # Generate log-linear spaced frequencies
+        self.frequencies = np.logspace(0, np.log10(scale), num_frequencies, base=np.e)
+        self.num_frequencies = num_frequencies
 
-    :param P: Input point(s) as a tensor. For a single point, the shape should be (3,).
-              For multiple points, the shape should be (N, 3), where N is the number of points.
-    :param L: The number of frequencies to use in the Fourier feature mapping.
-    :return: Fourier features of the input point(s). For a single point, the shape of the
-             output tensor will be (2L,). For multiple points, the shape will be (N, 2L),
-             where each row corresponds to the Fourier features of a point.
-    """
-    # Sample B from Gaussian distribution
-    B = torch.randn(L, 3, device=P.device)
+    def gaussian(self, P):
+        """
+        Applies Fourier feature mapping to one or more 3D points.
 
-    # Compute 2πBP (shape will be (..., L, 3))
-    BP = 2 * torch.pi * torch.matmul(P.float(), B.T)
+        This function maps each 3D point (or a batch of points) to a higher-dimensional
+        space using Fourier features. It's useful for encoding spatial information in neural networks.
 
-    # Concatenate cos and sin features
-    fourier_features = torch.cat([torch.cos(BP), torch.sin(BP)], dim=-1)
+        :param P: Input point(s) as a tensor. For a single point, the shape should be (3,).
+                For multiple points, the shape should be (N, 3), where N is the number of points.
+        :param L: The number of frequencies to use in the Fourier feature mapping.
+        :return: Fourier features of the input point(s). For a single point, the shape of the
+                output tensor will be (2L,). For multiple points, the shape will be (N, 2L),
+                where each row corresponds to the Fourier features of a point.
+        """
+        # Compute 2πBP (shape will be (..., L, 3))
+        BP = 2 * torch.pi * torch.matmul(P.float(), self.B.T)
 
-    return fourier_features
+        # Concatenate cos and sin features
+        fourier_features = torch.cat([torch.cos(BP), torch.sin(BP)], dim=-1)
+
+        return fourier_features
+
+    def positional_encoding(self, P):
+        """
+        Applies positional encoding to one or more 3D points.
+
+        :param P: Input point(s) as a tensor. For a single point, the shape should be (3,).
+                  For multiple points, the shape should be (N, 3), where N is the number of points.
+        :return: Encoded features of the input point(s). The shape of the output tensor will be (N, 2 * m * 3),
+                 where each row corresponds to the encoded features of a point.
+        """
+        P = P.float()  # Ensure input is float
+        encoded_features = []
+
+        for freq in self.frequencies:
+            # Calculate encoding for each frequency
+            freq_encoding = 2 * np.pi * freq / self.num_frequencies
+            cos_features = torch.cos(freq_encoding * P)
+            sin_features = torch.sin(freq_encoding * P)
+            encoded_features.append(cos_features)
+            encoded_features.append(sin_features)
+
+        # Concatenate all features
+        encoded_features = torch.cat(encoded_features, dim=-1)
+
+        return encoded_features
+
+

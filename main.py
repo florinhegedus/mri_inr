@@ -1,4 +1,4 @@
-from data import get_mri_dataloader
+from data import get_mri_dataloader, get_test_dataloader
 from mri import MRI
 from nn import NeuralNet
 from utils import get_device
@@ -10,13 +10,8 @@ def main():
     mri = MRI(file_path)
 
     device = get_device()
-    dataloader = get_mri_dataloader(mri, batch_size=8, device=device)
 
-    net = NeuralNet()
-    net.to(device)
-    
-    coords, gt_intensity_values = next(iter(dataloader))
-    output = net(coords)
+    get_test_dataloader(mri, 1, 2048, device)
 
 
 if __name__ == "__main__":
