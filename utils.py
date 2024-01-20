@@ -3,9 +3,12 @@ import torch
 
 
 def init_logging():
+    blue_color_code = '\033[94m'  # Light blue color code
+    reset_code = '\033[0m'  # Reset color code
+
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s | %(message)s',
+        format=f'{blue_color_code}%(asctime)s | %(message)s{reset_code}',
         datefmt='%H:%M:%S'
     )
 
