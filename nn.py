@@ -49,38 +49,28 @@ class NeuralNet(nn.Module):
         return out
     
 
-class FourierFeatureMapping:
+class GaussianMapping:
     def __init__(self, num_frequencies, scale, device):
         # Sample B from Gaussian distribution
         self.B = torch.randn(num_frequencies, 3, device=device) * scale
 
-        # Generate log-linear spaced frequencies
-        self.frequencies = np.logspace(0, np.log10(scale), num_frequencies, base=np.e)
-        self.num_frequencies = num_frequencies
-
-    def gaussian(self, P):
-        """
-        Applies Fourier feature mapping to one or more 3D points.
-
-        This function maps each 3D point (or a batch of points) to a higher-dimensional
-        space using Fourier features. It's useful for encoding spatial information in neural networks.
-
-        :param P: Input point(s) as a tensor. For a single point, the shape should be (3,).
-                For multiple points, the shape should be (N, 3), where N is the number of points.
-        :param L: The number of frequencies to use in the Fourier feature mapping.
-        :return: Fourier features of the input point(s). For a single point, the shape of the
-                output tensor will be (2L,). For multiple points, the shape will be (N, 2L),
-                where each row corresponds to the Fourier features of a point.
-        """
-        # Compute 2πBP (shape will be (..., L, 3))
-        BP = 2 * torch.pi * torch.matmul(P.float(), self.B.T)
+    def map(self, P):
+        # Compute 2πBP (shape will be (..., num_features, 3))
+        BP = (2 * torch.pi * P.float()) @ self.B.T
 
         # Concatenate cos and sin features
         fourier_features = torch.cat([torch.cos(BP), torch.sin(BP)], dim=-1)
 
         return fourier_features
+    
 
-    def positional_encoding(self, P):
+class PosEncMapping:
+    def __init__(self, num_frequencies, scale):
+        # Generate log-linear spaced frequencies
+        self.frequencies = np.logspace(0, np.log10(scale), num_frequencies, base=np.e)
+        self.num_frequencies = num_frequencies
+
+    def map(self, P):
         """
         Applies positional encoding to one or more 3D points.
 
@@ -104,5 +94,3 @@ class FourierFeatureMapping:
         encoded_features = torch.cat(encoded_features, dim=-1)
 
         return encoded_features
-
-

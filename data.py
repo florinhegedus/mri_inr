@@ -50,6 +50,8 @@ def get_voxel_grid(mri, upsample_factor=1):
                       total number of voxels in the MRI volume and each row represents
                       the (x, y, z) coordinates of a voxel.
     '''
+    # Get voxel grid
+    logging.info(f"Creating voxel grid: originial voxel grid resolution x{upsample_factor}")
     # Define the dimensions of the MRI
     x_dim, y_dim, z_dim = [ax * upsample_factor for ax in mri.data.shape]
 
@@ -88,7 +90,7 @@ def get_intensity_values(mri):
     return intensity_values
 
 
-def get_mri_dataloader(mri, batch_size, device):
+def get_train_dataloader(mri, batch_size, device):
     # Get voxel grid
     logging.info(f"Create voxel grid from MRI")
     voxel_grid = get_voxel_grid(mri).to(device)
@@ -107,8 +109,6 @@ def get_mri_dataloader(mri, batch_size, device):
 
 
 def get_test_dataloader(mri, upsample_factor, batch_size, device):
-    # Get voxel grid
-    logging.info(f"Create voxel grid from MRI")
     voxel_grid = get_voxel_grid(mri, upsample_factor).to(device)
     normalized_grid = normalize_coordinates(voxel_grid)
 
