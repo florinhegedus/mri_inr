@@ -37,7 +37,7 @@ class MRIIntensityDataset(Dataset):
         return self.voxel_coords[idx], self.intensities[idx]
     
 
-def get_voxel_grid(mri, upsample_factor=1):
+def get_voxel_grid(mri, voxel_size):
     '''
     Generates a voxel grid for the MRI data.
 
@@ -46,14 +46,14 @@ def get_voxel_grid(mri, upsample_factor=1):
     coordinates of a voxel in the MRI volume.
 
     Returns:
-        torch.Tensor: A 2D tensor of shape (num_voxels, 3), where num_voxels is the
+        torch.Tensor: A 21D tensor of shape (num_voxels, 3), where num_voxels is the
                       total number of voxels in the MRI volume and each row represents
                       the (x, y, z) coordinates of a voxel.
     '''
     # Get voxel grid
-    logging.info(f"Creating voxel grid: originial voxel grid resolution x{upsample_factor}")
+    logging.info(f"Creating voxel grid of shape {voxel_size}")
     # Define the dimensions of the MRI
-    x_dim, y_dim, z_dim = [ax * upsample_factor for ax in mri.data.shape]
+    x_dim, y_dim, z_dim = voxel_size
 
     # Create range vectors for each dimension
     x_range = torch.arange(x_dim)
@@ -93,7 +93,7 @@ def get_intensity_values(mri):
 def get_train_dataloader(mri, batch_size, device):
     # Get voxel grid
     logging.info(f"Create voxel grid from MRI")
-    voxel_grid = get_voxel_grid(mri).to(device)
+    voxel_grid = get_voxel_grid(mri, mri.data.shape).to(device)
     normalized_grid = normalize_coordinates(voxel_grid)
 
     # Get intensity values and move to the same device
@@ -108,8 +108,8 @@ def get_train_dataloader(mri, batch_size, device):
     return dataloader
 
 
-def get_test_dataloader(mri, upsample_factor, batch_size, device):
-    voxel_grid = get_voxel_grid(mri, upsample_factor).to(device)
+def get_test_dataloader(mri, voxel_size, batch_size, device):
+    voxel_grid = get_voxel_grid(mri, voxel_size).to(device)
     normalized_grid = normalize_coordinates(voxel_grid)
 
     dataloader = DataLoader(normalized_grid, batch_size=batch_size, shuffle=False)

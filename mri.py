@@ -9,11 +9,21 @@ init_logging()
 
 
 class MRI:
-    def __init__(self, nii_file_path: str):
-        self.nii_file_path = nii_file_path
-        self.data, self.voxel_size = self.__read_nii_file(nii_file_path)
+    def __init__(self, data, voxel_size):
+        self.data = data
+        self.voxel_size = voxel_size
 
-    def __read_nii_file(self, file_path):
+    @classmethod
+    def from_nii_file(cls, file_path):
+        data, voxel_size = cls.__read_nii_file(file_path)
+        return cls(data, voxel_size)
+
+    @classmethod
+    def from_data_and_voxel_size(cls, data, voxel_size):
+        return cls(data, voxel_size)
+
+    @staticmethod
+    def __read_nii_file(file_path):
         logging.info(f"Reading data from {file_path}")
         mri_file = nib.load(file_path)
 

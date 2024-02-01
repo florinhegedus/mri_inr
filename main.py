@@ -14,7 +14,7 @@ init_logging()
 def main():
     # Load the MRI data from the file
     file_path = '../../hcp1200/996782/T1w_acpc_dc_restore_brain_downsample_factor_8.nii.gz'
-    mri = MRI(file_path)
+    mri = MRI.from_nii_file(file_path)
 
     device = get_device()
     dataloader = get_train_dataloader(mri, batch_size=2048, device=device)
