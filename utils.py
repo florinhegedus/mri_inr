@@ -1,5 +1,8 @@
 import logging
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
+import yaml
 
 
 def init_logging():
@@ -31,3 +34,31 @@ def get_device(verbose: bool=True) -> torch.device:
         print("--"*30)
 
     return device
+
+
+def read_config():
+    # Path to your YAML file
+    config_file_path = 'config.yaml'
+
+    # Read the YAML file
+    with open(config_file_path, 'r') as file:
+        config = yaml.safe_load(file)
+    
+    return config
+
+
+def save_reconstruction_comparison(pred_slice, gt_slice, file_path="images/comparison.png"):
+    logging.info("Saving comparison to images/comparison.png")
+    # Create a figure with subplots
+    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+
+    # Display each slice
+    axes[0].imshow(pred_slice.T, cmap="gray", origin="lower")
+    axes[0].set_title("Pred Slice")
+    axes[0].axis("off")
+
+    axes[1].imshow(gt_slice.T, cmap="gray", origin="lower")
+    axes[1].set_title("GT Slice")
+    axes[1].axis("off")
+
+    fig.savefig(file_path)

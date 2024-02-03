@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+from abc import ABC, abstractmethod
 
 
 class NeuralNet(nn.Module):
@@ -49,7 +50,20 @@ class NeuralNet(nn.Module):
         return out
     
 
-class GaussianMapping:
+class FourierMapping(ABC):
+    @abstractmethod
+    def map(self, P):
+        """
+        Applies a mapping/transformation to one or more 3D points.
+        
+        :param P: Input point(s) as a tensor. For a single point, the shape should be (3,).
+                  For multiple points, the shape should be (N, 3), where N is the number of points.
+        :return: Transformed features of the input point(s).
+        """
+        pass
+    
+
+class GaussianMapping(FourierMapping):
     def __init__(self, num_frequencies, scale, device):
         # Sample B from Gaussian distribution
         self.B = torch.randn(num_frequencies, 3, device=device) * scale
@@ -64,7 +78,7 @@ class GaussianMapping:
         return fourier_features
     
 
-class PosEncMapping:
+class PosEncMapping(FourierMapping):
     def __init__(self, num_frequencies, scale):
         # Generate log-linear spaced frequencies
         self.frequencies = np.logspace(0, np.log10(scale), num_frequencies, base=np.e)
@@ -94,3 +108,18 @@ class PosEncMapping:
         encoded_features = torch.cat(encoded_features, dim=-1)
 
         return encoded_features
+
+
+class FourierMappingFactory:
+    @staticmethod
+    def create(encoding, input_size=None, scale=None, device=None):
+        if encoding == 'positional_encoding':
+            if input_size is None:
+                input_size = 120  # Default value if not provided
+            return PosEncMapping(num_frequencies=input_size // 6, scale=scale if scale else 1000)
+        elif encoding == 'gaussian':
+            if input_size is None:
+                input_size = 256  # Default value if not provided
+            return GaussianMapping(num_frequencies=input_size // 2, scale=scale if scale else 10, device=device)
+        else:
+            raise ValueError("Unknown encoding type. Please choose 'pos_enc' or 'gaussian'.")

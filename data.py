@@ -37,7 +37,7 @@ class MRIIntensityDataset(Dataset):
         return self.voxel_coords[idx], self.intensities[idx]
     
 
-def get_voxel_grid(mri, voxel_size):
+def get_voxel_grid(voxel_size):
     '''
     Generates a voxel grid for the MRI data.
 
@@ -93,7 +93,7 @@ def get_intensity_values(mri):
 def get_train_dataloader(mri, batch_size, device):
     # Get voxel grid
     logging.info(f"Create voxel grid from MRI")
-    voxel_grid = get_voxel_grid(mri, mri.data.shape).to(device)
+    voxel_grid = get_voxel_grid(mri.data.shape).to(device)
     normalized_grid = normalize_coordinates(voxel_grid)
 
     # Get intensity values and move to the same device
@@ -101,17 +101,19 @@ def get_train_dataloader(mri, batch_size, device):
     intensity_values = get_intensity_values(mri).to(device)
 
     # Create the dataset and dataloader
-    logging.info(f"Creating the dataloader")
+    logging.info(f"Creating the train dataloader")
     dataset = MRIIntensityDataset(normalized_grid, intensity_values) 
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     return dataloader
 
 
-def get_test_dataloader(mri, voxel_size, batch_size, device):
-    voxel_grid = get_voxel_grid(mri, voxel_size).to(device)
+def get_test_dataloader(voxel_size, batch_size, device):
+    logging.info('Creating high-resolution voxel grid for reconstruction')
+    voxel_grid = get_voxel_grid(voxel_size).to(device)
     normalized_grid = normalize_coordinates(voxel_grid)
 
+    logging.info(f"Creating dataloader for reconstruction")
     dataloader = DataLoader(normalized_grid, batch_size=batch_size, shuffle=False)
 
     return dataloader
