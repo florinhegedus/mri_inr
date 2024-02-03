@@ -107,20 +107,19 @@ def evaluate(pred_mri, gt_mri):
     ssim_score = ssim(gt_slice, pred_slice, data_range=gt_slice.max() - gt_slice.min())
 
     logging.info(f'PSNR: {psnr_score}, SSIM: {ssim_score}')
-
-    save_reconstruction_comparison(pred_slice, gt_slice)
     
     return
 
 
 def main():
     # Training
-    lr_mri_path = '../../hcp1200/996782/T1w_acpc_dc_restore_brain_downsample_factor_8.nii.gz'
+    lr_mri_path = '../../hcp1200/996782/T1w_acpc_dc_restore_brain_downsample_factor_4.nii.gz'
     lr_mri = MRI.from_nii_file(lr_mri_path)
 
     config = read_config()
     num_epochs = config["training"]["num_epochs"]
     batch_size = config["training"]["batch_size"]
+    eval_existing_model = config["training"]["eval_existing_model"]
     encoding = config["encoding"]
     input_size = config[encoding]["input_size"]
     scale = config[encoding]["scale"]
@@ -130,18 +129,19 @@ def main():
     fourier_mapping = FourierMappingFactory.create(encoding, input_size=input_size, scale=scale, device=device)
     net = NeuralNet(input_size=input_size).to(device)
 
-
-    train(lr_mri, num_epochs, batch_size, fourier_mapping, net, device)
-
-    net.save_weights(f"weights/model_{num_epochs}.pth")
-    net.load_weights(f"weights/model_{num_epochs}.pth")
+    if not eval_existing_model:
+        train(lr_mri, num_epochs, batch_size, fourier_mapping, net, device)
+        net.save_weights(f"weights/model_{num_epochs}.pth")
+    else:
+        net.load_weights(f"weights/model_{num_epochs}.pth")
 
     # Evaluation
-    hr_mri_path = '../../hcp1200/996782/T1w_acpc_dc_restore_brain_downsample_factor_4.nii.gz'
+    hr_mri_path = '../../hcp1200/996782/T1w_acpc_dc_restore_brain_downsample_factor_2.nii.gz'
     hr_mri = MRI.from_nii_file(hr_mri_path)
 
     pred_mri = reconstruct_hr_mri(hr_mri.data.shape, fourier_mapping, net, device)
     evaluate(pred_mri, hr_mri)
+    save_reconstruction_comparison(lr_mri, pred_mri, hr_mri)
 
 
 if __name__ == "__main__":

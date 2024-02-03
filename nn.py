@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 from abc import ABC, abstractmethod
 
+from utils import logging
+
 
 class NeuralNet(nn.Module):
     def __init__(self, input_size=3, hidden_layer_size=256, num_hidden_layers=18, output_channels=1):
@@ -50,9 +52,11 @@ class NeuralNet(nn.Module):
         return out
     
     def save_weights(self, path):
+        logging.info(f"Saving model weights to {path}")
         torch.save(self.state_dict(), path)
 
     def load_weights(self, path):
+        logging.info(f"Loading model weights from {path}")
         self.load_state_dict(torch.load(path))
     
 

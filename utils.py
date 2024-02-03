@@ -47,18 +47,25 @@ def read_config():
     return config
 
 
-def save_reconstruction_comparison(pred_slice, gt_slice, file_path="images/comparison.png"):
+def save_reconstruction_comparison(lr_mri, pred_mri, gt_mri, file_path="images/comparison.png"):
     logging.info("Saving comparison to images/comparison.png")
+    lr_slice = lr_mri.data[lr_mri.data.shape[0] // 2, :, :]
+    pred_slice = pred_mri.data[pred_mri.data.shape[0] // 2, :, :]
+    gt_slice = gt_mri.data[gt_mri.data.shape[0] // 2, :, :]
     # Create a figure with subplots
-    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+    fig, axes = plt.subplots(1, 3, figsize=(24, 8))
 
     # Display each slice
-    axes[0].imshow(pred_slice.T, cmap="gray", origin="lower")
-    axes[0].set_title("Pred Slice")
+    axes[0].imshow(lr_slice.T, cmap="gray", origin="lower")
+    axes[0].set_title("LR Input")
     axes[0].axis("off")
 
-    axes[1].imshow(gt_slice.T, cmap="gray", origin="lower")
-    axes[1].set_title("GT Slice")
+    axes[1].imshow(pred_slice.T, cmap="gray", origin="lower")
+    axes[1].set_title("HR Reconstruction")
     axes[1].axis("off")
+
+    axes[2].imshow(gt_slice.T, cmap="gray", origin="lower")
+    axes[2].set_title("HR Reference")
+    axes[2].axis("off")
 
     fig.savefig(file_path)

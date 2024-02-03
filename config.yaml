@@ -9,6 +9,7 @@ gaussian_mapping:
 training:
   num_epochs: 100
   batch_size: 2500
+  eval_existing_model: True
 
 reconstruction:
   voxel_size: [66, 79, 66]
