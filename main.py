@@ -123,14 +123,18 @@ def main():
     batch_size = config["training"]["batch_size"]
     encoding = config["encoding"]
     input_size = config[encoding]["input_size"]
+    scale = config[encoding]["scale"]
     voxel_size = config["reconstruction"]["voxel_size"]
 
     device = get_device()
-    fourier_mapping = FourierMappingFactory.create(encoding, input_size=input_size, scale=1000, device=device)
+    fourier_mapping = FourierMappingFactory.create(encoding, input_size=input_size, scale=scale, device=device)
     net = NeuralNet(input_size=input_size).to(device)
 
 
     train(lr_mri, num_epochs, batch_size, fourier_mapping, net, device)
+
+    net.save_weights(f"weights/model_{num_epochs}.pth")
+    net.load_weights(f"weights/model_{num_epochs}.pth")
 
     # Evaluation
     hr_mri_path = '../../hcp1200/996782/T1w_acpc_dc_restore_brain_downsample_factor_4.nii.gz'

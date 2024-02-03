@@ -1,12 +1,14 @@
 encoding: "positional_encoding" # "gaussian_mapping"
 positional_encoding:
   input_size: 120
+  scale: 10000
 gaussian_mapping:
   input_size: 256
+  scale: 10
 
 training:
-  num_epochs: 30
-  batch_size: 4096
+  num_epochs: 100
+  batch_size: 2500
 
 reconstruction:
   voxel_size: [66, 79, 66]
