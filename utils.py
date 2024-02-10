@@ -3,6 +3,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import yaml
+from skimage.metrics import structural_similarity as ssim
+from skimage.metrics import peak_signal_noise_ratio as psnr
 
 
 def init_logging():
@@ -69,3 +71,15 @@ def save_reconstruction_comparison(lr_mri, pred_mri, gt_mri, file_path="images/c
     axes[2].axis("off")
 
     fig.savefig(file_path)
+
+
+def evaluate(pred_mri, gt_mri):
+    pred_slice = pred_mri.data[pred_mri.data.shape[0] // 2, :, :]
+    gt_slice = gt_mri.data[gt_mri.data.shape[0] // 2, :, :]
+
+    psnr_score = psnr(gt_slice, pred_slice, data_range=gt_slice.max() - gt_slice.min())
+    ssim_score = ssim(gt_slice, pred_slice, data_range=gt_slice.max() - gt_slice.min())
+
+    logging.info(f'PSNR: {psnr_score}, SSIM: {ssim_score}')
+    
+    return

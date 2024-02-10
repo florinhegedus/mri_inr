@@ -2,19 +2,31 @@ import logging
 import numpy as np
 import torch
 from scipy.spatial import cKDTree
-from torch import nn
+from torch import nn, optim
 from mri import MRI
-from utils import init_logging
+from utils import init_logging, evaluate, save_reconstruction_comparison
 
 
 init_logging()
 
 
-class GaussianModel:
+class GaussianModel(nn.Module):
     def __init__(self, mri_data) -> None:
-        self.mri_data = mri_data
-        self.centers, self.sigmas, self.intensities = self.setup_functions()
-        # centers = nn.Parameter(torch.tensor(self.centers, dtype=torch.float, requires_grad=True))
+        super(GaussianModel, self).__init__()
+        self.mri_data = torch.tensor(mri_data, dtype=torch.float, requires_grad=False)  # Ensure MRI data is a tensor but not trainable
+        self.max_intensity = self.mri_data.max()
+
+        # Ensure that we're working with the grid coordinates correctly
+        self.grid = torch.stack(torch.meshgrid([
+            torch.linspace(0, 1, steps=mri_data.shape[0], device=self.mri_data.device),
+            torch.linspace(0, 1, steps=mri_data.shape[1], device=self.mri_data.device),
+            torch.linspace(0, 1, steps=mri_data.shape[2], device=self.mri_data.device)
+        ], indexing='ij'), dim=-1)  # Shape: [X, Y, Z, 3]
+
+        centers, sigmas, intensities = self.setup_functions()
+        self.centers = nn.Parameter(centers.requires_grad_(True))
+        self.sigmas = nn.Parameter(sigmas.requires_grad_(True))
+        self.intensities = nn.Parameter(intensities.requires_grad_(True))
 
     def setup_functions(self):
         logging.info("Initializing Gaussians")
@@ -33,95 +45,104 @@ class GaussianModel:
         median_grad = np.median(filtered_grad_magnitude[filtered_grad_magnitude > 0])
         close_to_median = np.abs(filtered_grad_magnitude - median_grad) < (0.5 * median_grad)
         centers = np.argwhere(close_to_median)
+        centers_tensor = torch.tensor(centers, dtype=torch.long, device=self.mri_data.device)
+
+        # Extract the normalized coordinates for each center
+        normalized_centers = self.grid[centers_tensor[:, 0], centers_tensor[:, 1], centers_tensor[:, 2]]
 
         logging.info("Calculating gaussian radiuses")
-        sigmas = self.calculate_gaussian_radii_kdtree(centers, search_radius=5)
+        sigmas = self.calculate_sigmas(normalized_centers)
 
         logging.info("Intensities are calculated directly from the voxel values")
-        intensities = np.array([mri_volume[tuple(center)] for center in centers])
+        intensities = torch.tensor([mri_volume[tuple(center)] for center in centers])
+        intensities = intensities / self.max_intensity
+        self.mri_data = self.mri_data / self.max_intensity
 
         assert len(centers) == len(sigmas) == len(intensities)
 
         logging.info(f"Initial number of gaussians: {len(centers)}")
 
-        return centers, sigmas, intensities
+        return normalized_centers, sigmas, intensities
     
-    def calculate_gaussian_radii_kdtree(self, gaussian_centers, search_radius):
-        kd_tree = cKDTree(gaussian_centers)
+    def calculate_sigmas(self, normalized_centers):
+        normalized_centers_np = normalized_centers.cpu().numpy()  # Make sure it's on CPU and convert to NumPy
 
-        # Query the k-d tree for points within the search radius for each center
-        # This returns a list of points for each center that are within the search radius
-        counts = kd_tree.query_ball_tree(kd_tree, r=search_radius)
+        # Create a k-d tree from the normalized centers
+        tree = cKDTree(normalized_centers_np)
 
-        # Calculate the radius inversely proportional to the number of close centers + 1 to avoid division by zero
-        radii = np.array([1 / len(counts[i]) for i in range(len(gaussian_centers))])
+        # Query the k-d tree for the 4 closest points to each center (including itself)
+        distances, indices = tree.query(normalized_centers_np, k=4)
 
-        return radii
+        # Exclude the nearest distance (distance to itself) and take the next three
+        closest_distances = distances[:, 1:4]  # Exclude the first column, which is zero
 
-    def gaussian_contribution(self, x, center, sigma, intensity):
-        """
-        Calculate the contribution of a single Gaussian at a given position x.
-        
-        Parameters:
-        - x: The position in the volume where the contribution is being calculated.
-        - center: The center coordinates of the Gaussian (µi = (xi, yi, zi)).
-        - sigma: The standard deviation of the Gaussian, reflecting an isotropic covariance matrix.
-        - intensity: The intensity (Ii) of the Gaussian.
-        
-        Returns:
-        - The contribution of the Gaussian to the volume at position x.
-        """
-        # Calculate the squared Euclidean distance between x and the Gaussian center
-        distance_squared = np.sum((x - center) ** 2)
-        # Calculate the contribution using the Gaussian function
-        return intensity * np.exp(-0.5 * distance_squared / sigma ** 2)
+        # Calculate the mean of these distances for each center
+        sigmas = np.mean(closest_distances, axis=1)
 
-    def discretize_gaussians(self, d_factor=3):
-        """
-        Discretize a set of 3D Gaussians into a volumetric image with optimization.
-        Limit calculations to within a confidence interval around each Gaussian center.
-        
-        Parameters:
-        - volume_shape: The shape of the volumetric image (x, y, z).
-        - centers: An array of center coordinates for the Gaussians.
-        - sigmas: An array of standard deviations for the Gaussians.
-        - intensities: An array of intensities for the Gaussians.
-        - d_factor: Multiplier to determine the extent of calculation around each center.
-        
-        Returns:
-        - A volumetric image represented as a NumPy array, with the optimized contribution of all Gaussians.
-        """
+        # If you need to use sigmas in PyTorch, convert them back to a tensor
+        sigmas_tensor = torch.tensor(sigmas, dtype=torch.float, device=normalized_centers.device)
+
+        return sigmas_tensor
+    
+    def forward(self):
         volume_shape = self.mri_data.shape
-        volume = np.zeros(volume_shape)
+        # Initialize an empty tensor for the volume with the same shape as the MRI data
+        volume = torch.zeros(volume_shape, dtype=torch.float, device=self.mri_data.device)
+
+        # For each Gaussian, compute its contribution to its surrounding volume
         for i in range(len(self.centers)):
-            sigma = self.sigmas[i]
-            center = self.centers[i]
-            intensity = self.intensities[i]
+            center = self.centers[i]  # The center of the current Gaussian
+            sigma = self.sigmas[i]    # The sigma value of the current Gaussian
+            intensity = self.intensities[i]  # The intensity of the current Gaussian
             
-            # Define the extent of calculation for the Gaussian based on d_factor
-            d = d_factor * sigma
-            lower_bounds = np.maximum(0, np.floor(center - d).astype(int))
-            upper_bounds = np.minimum(volume_shape, np.ceil(center + d).astype(int))
+            # Compute the squared distance from each point in the grid to the Gaussian center
+            distance_squared = torch.sum((self.grid - center) ** 2, dim=-1)
             
-            # Iterate only within the defined extent for the current Gaussian
-            for x in np.ndindex(tuple(upper_bounds - lower_bounds)):
-                x_global = lower_bounds + x  # Convert local coordinates to global coordinates
-                contribution = self.gaussian_contribution(x_global, center, sigma, intensity)
-                volume[tuple(x_global)] += contribution
+            # Compute the Gaussian contribution using the squared distance
+            contribution = intensity * torch.exp(-0.5 * distance_squared / sigma ** 2)
+            
+            # Update the volume with the contribution of the current Gaussian
+            volume += contribution
 
         return volume
     
-    def loss(self):
-        
-        return
+    def loss(self, reconstructed_volume):
+        # Implement the loss function. For example, use Mean Squared Error (MSE) between the reconstructed volume and the original MRI data
+        mse_loss = nn.MSELoss()
+        return mse_loss(reconstructed_volume, self.mri_data)
 
 
 def main():
     lr_mri_path = '../../hcp1200/996782/T1w_acpc_dc_restore_brain_downsample_factor_8.nii.gz'
     lr_mri = MRI.from_nii_file(lr_mri_path)
     gm = GaussianModel(lr_mri.data)
-    reconstructed_volume = gm.discretize_gaussians()
-    pred_mri = MRI.from_data_and_voxel_size(reconstructed_volume, (lr_mri.data.shape))
+    optimizer = optim.Adam(gm.parameters(), lr=0.002)  # Initialize the optimizer with the model parameters
+    
+    # Define the number of epochs or iterations for optimization
+    epochs = 10
+    for epoch in range(epochs):
+        optimizer.zero_grad()  # Clear gradients
+        reconstructed_volume = gm.forward()  # Perform forward pass
+        loss = gm.loss(reconstructed_volume)  # Compute loss
+        loss.backward()  # Backpropagate to compute gradients
+        for name, param in gm.named_parameters():
+            if param.grad is not None:
+                print(f"Gradient for {name}: {param.grad.norm().item()}")
+            else:
+                print(f"No gradient for {name}")
+        optimizer.step()  # Update parameters
+
+        logging.info(f"Epoch {epoch}, Loss: {loss.item()}")
+
+    # Reconstruct volume
+    with torch.no_grad():
+        reconstructed_volume = gm.forward()
+        reconstructed_volume = reconstructed_volume * gm.max_intensity
+        reconstructed_volume = reconstructed_volume.numpy()
+        pred_mri = MRI.from_data_and_voxel_size(reconstructed_volume, reconstructed_volume.shape)
+    
+    evaluate(pred_mri, lr_mri)
+    save_reconstruction_comparison(lr_mri, pred_mri, lr_mri)
     return
 
 

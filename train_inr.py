@@ -2,13 +2,11 @@ import logging
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from skimage.metrics import structural_similarity as ssim
-from skimage.metrics import peak_signal_noise_ratio as psnr
 
 from data import get_train_dataloader, get_test_dataloader
 from mri import MRI
 from nn import NeuralNet, FourierMappingFactory
-from utils import get_device, init_logging, read_config, save_reconstruction_comparison
+from utils import get_device, init_logging, read_config, save_reconstruction_comparison, evaluate
 
 
 init_logging()
@@ -97,18 +95,6 @@ def reconstruct_hr_mri(voxel_size, fourier_mapping, net, device):
     logging.info('Finished reconstruction')
 
     return pred_mri
-
-
-def evaluate(pred_mri, gt_mri):
-    pred_slice = pred_mri.data[pred_mri.data.shape[0] // 2, :, :]
-    gt_slice = gt_mri.data[gt_mri.data.shape[0] // 2, :, :]
-
-    psnr_score = psnr(gt_slice, pred_slice, data_range=gt_slice.max() - gt_slice.min())
-    ssim_score = ssim(gt_slice, pred_slice, data_range=gt_slice.max() - gt_slice.min())
-
-    logging.info(f'PSNR: {psnr_score}, SSIM: {ssim_score}')
-    
-    return
 
 
 def main():
