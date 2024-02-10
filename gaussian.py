@@ -13,8 +13,13 @@ init_logging()
 class GaussianModel(nn.Module):
     def __init__(self, mri_data) -> None:
         super(GaussianModel, self).__init__()
+
         self.mri_data = torch.tensor(mri_data, dtype=torch.float, requires_grad=False)  # Ensure MRI data is a tensor but not trainable
         self.max_intensity = self.mri_data.max()
+        self.volume_shape = self.mri_data.shape
+
+        # Calculate the scale factors to convert normalized coordinates back to volume indices
+        self.scale_factors = torch.tensor(self.volume_shape, dtype=torch.float, device=self.mri_data.device) - 1
 
         # Ensure that we're working with the grid coordinates correctly
         self.grid = torch.stack(torch.meshgrid([
@@ -85,27 +90,46 @@ class GaussianModel(nn.Module):
         return sigmas_tensor
     
     def forward(self):
-        volume_shape = self.mri_data.shape
-        # Initialize an empty tensor for the volume with the same shape as the MRI data
-        volume = torch.zeros(volume_shape, dtype=torch.float, device=self.mri_data.device)
+        volume = torch.zeros(self.volume_shape, dtype=torch.float, device=self.mri_data.device)
 
-        # For each Gaussian, compute its contribution to its surrounding volume
         for i in range(len(self.centers)):
-            center = self.centers[i]  # The center of the current Gaussian
-            sigma = self.sigmas[i]    # The sigma value of the current Gaussian
-            intensity = self.intensities[i]  # The intensity of the current Gaussian
-            
-            # Compute the squared distance from each point in the grid to the Gaussian center
-            distance_squared = torch.sum((self.grid - center) ** 2, dim=-1)
-            
+            center_norm = self.centers[i]  # Normalized center
+            sigma = self.sigmas[i]
+            intensity = self.intensities[i]
+
+            # Convert normalized center to actual volume index space
+            center = center_norm * self.scale_factors
+
+            # Define cutoff boundary as 3 sigma, scaled to volume space
+            cutoff = 3 * sigma * self.scale_factors
+
+            # Calculate the min and max indices for slicing the grid based on the cutoff
+            min_idx = torch.max(center - cutoff, torch.tensor([0, 0, 0], dtype=torch.float, device=self.mri_data.device))
+            max_idx = torch.min(center + cutoff, self.scale_factors)
+
+            # Ensure indices are integers and within the volume bounds
+            min_x, min_y, min_z = min_idx.int().tolist()
+            max_x, max_y, max_z = (max_idx + 1).int().tolist()  # +1 to include the upper bound
+
+            # Adjust max indices to ensure they do not exceed the volume shape
+            max_x = min(max_x, self.volume_shape[0])
+            max_y = min(max_y, self.volume_shape[1])
+            max_z = min(max_z, self.volume_shape[2])
+
+            # Use integer indices to slice the grid
+            local_grid = self.grid[min_x:max_x, min_y:max_y, min_z:max_z, :]
+
+            # Compute the squared distance from each point in the local grid to the Gaussian center
+            distance_squared = torch.sum((local_grid - center_norm) ** 2, dim=-1)
+
             # Compute the Gaussian contribution using the squared distance
-            contribution = intensity * torch.exp(-0.5 * distance_squared / sigma ** 2)
-            
-            # Update the volume with the contribution of the current Gaussian
-            volume += contribution
+            contribution = intensity * torch.exp(-0.5 * distance_squared / (sigma ** 2))
+
+            # Update the volume with the contribution of the current Gaussian within the neighborhood
+            volume[min_x:max_x, min_y:max_y, min_z:max_z] += contribution
 
         return volume
-    
+
     def loss(self, reconstructed_volume):
         # Implement the loss function. For example, use Mean Squared Error (MSE) between the reconstructed volume and the original MRI data
         mse_loss = nn.MSELoss()
