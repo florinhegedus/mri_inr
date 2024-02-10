@@ -4,38 +4,39 @@ import torch
 from scipy.spatial import cKDTree
 from torch import nn, optim
 from mri import MRI
-from utils import init_logging, evaluate, save_reconstruction_comparison
+from utils import init_logging, evaluate, save_reconstruction_comparison, get_device
 
 
 init_logging()
 
 
 class GaussianModel(nn.Module):
-    def __init__(self, mri_data) -> None:
+    def __init__(self, mri_data, device='cpu') -> None:
         super(GaussianModel, self).__init__()
 
-        self.mri_data = torch.tensor(mri_data, dtype=torch.float, requires_grad=False)  # Ensure MRI data is a tensor but not trainable
+        self.device = device
+        self.mri_data = torch.tensor(mri_data, dtype=torch.float, device=self.device, requires_grad=False)  # Ensure MRI data is a tensor but not trainable
         self.max_intensity = self.mri_data.max()
         self.volume_shape = self.mri_data.shape
 
         # Calculate the scale factors to convert normalized coordinates back to volume indices
-        self.scale_factors = torch.tensor(self.volume_shape, dtype=torch.float, device=self.mri_data.device) - 1
+        self.scale_factors = torch.tensor(self.volume_shape, dtype=torch.float, device=self.device) - 1
 
         # Ensure that we're working with the grid coordinates correctly
         self.grid = torch.stack(torch.meshgrid([
-            torch.linspace(0, 1, steps=mri_data.shape[0], device=self.mri_data.device),
-            torch.linspace(0, 1, steps=mri_data.shape[1], device=self.mri_data.device),
-            torch.linspace(0, 1, steps=mri_data.shape[2], device=self.mri_data.device)
+            torch.linspace(0, 1, steps=mri_data.shape[0], device=self.device),
+            torch.linspace(0, 1, steps=mri_data.shape[1], device=self.device),
+            torch.linspace(0, 1, steps=mri_data.shape[2], device=self.device)
         ], indexing='ij'), dim=-1)  # Shape: [X, Y, Z, 3]
 
         centers, sigmas, intensities = self.setup_functions()
-        self.centers = nn.Parameter(centers.requires_grad_(True))
-        self.sigmas = nn.Parameter(sigmas.requires_grad_(True))
-        self.intensities = nn.Parameter(intensities.requires_grad_(True))
+        self.centers = nn.Parameter(centers.requires_grad_(True)).to(self.device)
+        self.sigmas = nn.Parameter(sigmas.requires_grad_(True)).to(self.device)
+        self.intensities = nn.Parameter(intensities.requires_grad_(True)).to(self.device)
 
     def setup_functions(self):
         logging.info("Initializing Gaussians")
-        mri_volume = self.mri_data
+        mri_volume = self.mri_data.cpu().numpy()
 
         logging.info("Compute gradient magnitude")
         grad_x, grad_y, grad_z = np.gradient(mri_volume)
@@ -50,7 +51,7 @@ class GaussianModel(nn.Module):
         median_grad = np.median(filtered_grad_magnitude[filtered_grad_magnitude > 0])
         close_to_median = np.abs(filtered_grad_magnitude - median_grad) < (0.5 * median_grad)
         centers = np.argwhere(close_to_median)
-        centers_tensor = torch.tensor(centers, dtype=torch.long, device=self.mri_data.device)
+        centers_tensor = torch.tensor(centers, dtype=torch.long, device=self.device)
 
         # Extract the normalized coordinates for each center
         normalized_centers = self.grid[centers_tensor[:, 0], centers_tensor[:, 1], centers_tensor[:, 2]]
@@ -59,7 +60,7 @@ class GaussianModel(nn.Module):
         sigmas = self.calculate_sigmas(normalized_centers)
 
         logging.info("Intensities are calculated directly from the voxel values")
-        intensities = torch.tensor([mri_volume[tuple(center)] for center in centers])
+        intensities = torch.tensor([mri_volume[tuple(center)] for center in centers], device=self.device)
         intensities = intensities / self.max_intensity
         self.mri_data = self.mri_data / self.max_intensity
 
@@ -90,7 +91,7 @@ class GaussianModel(nn.Module):
         return sigmas_tensor
     
     def forward(self):
-        volume = torch.zeros(self.volume_shape, dtype=torch.float, device=self.mri_data.device)
+        volume = torch.zeros(self.volume_shape, dtype=torch.float, device=self.device)
 
         for i in range(len(self.centers)):
             center_norm = self.centers[i]  # Normalized center
@@ -104,7 +105,7 @@ class GaussianModel(nn.Module):
             cutoff = 3 * sigma * self.scale_factors
 
             # Calculate the min and max indices for slicing the grid based on the cutoff
-            min_idx = torch.max(center - cutoff, torch.tensor([0, 0, 0], dtype=torch.float, device=self.mri_data.device))
+            min_idx = torch.max(center - cutoff, torch.tensor([0, 0, 0], dtype=torch.float, device=self.device))
             max_idx = torch.min(center + cutoff, self.scale_factors)
 
             # Ensure indices are integers and within the volume bounds
@@ -137,14 +138,33 @@ class GaussianModel(nn.Module):
 
 
 def main():
-    lr_mri_path = '../../hcp1200/996782/T1w_acpc_dc_restore_brain_downsample_factor_8.nii.gz'
+    lr_mri_path = '../../hcp1200/996782/T1w_acpc_dc_restore_brain_downsample_factor_4.nii.gz'
     lr_mri = MRI.from_nii_file(lr_mri_path)
+
+    device = get_device()
+
     gm = GaussianModel(lr_mri.data)
-    optimizer = optim.Adam(gm.parameters(), lr=0.002)  # Initialize the optimizer with the model parameters
     
+    # Separate parameters into groups for different learning rates
+    center_params = [gm.centers]
+    sigma_and_intensity_params = [gm.sigmas, gm.intensities]
+
+    # Initialize the optimizer with separate parameter groups
+    optimizer = optim.Adam([
+        {'params': center_params, 'lr': 2e-4},  # Learning rate for centers
+        {'params': sigma_and_intensity_params, 'lr': 0.0005}  # Constant learning rate for sigmas and intensities
+    ], betas=(0.9, 0.999))
+
     # Define the number of epochs or iterations for optimization
-    epochs = 10
-    for epoch in range(epochs):
+    num_epochs = 50
+
+    # Define an exponential decay for the learning rate of centers
+    lambda1 = lambda epoch: (2e-6 / 2e-4) ** (epoch / num_epochs)
+    lambda2 = lambda epoch: 1  # No change in learning rate
+
+    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=[lambda1, lambda2])
+
+    for epoch in range(num_epochs):
         optimizer.zero_grad()  # Clear gradients
         reconstructed_volume = gm.forward()  # Perform forward pass
         loss = gm.loss(reconstructed_volume)  # Compute loss
@@ -155,6 +175,7 @@ def main():
             else:
                 print(f"No gradient for {name}")
         optimizer.step()  # Update parameters
+        scheduler.step()
 
         logging.info(f"Epoch {epoch}, Loss: {loss.item()}")
 
