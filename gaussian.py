@@ -11,12 +11,12 @@ init_logging()
 
 
 class GaussianModel(nn.Module):
-    def __init__(self, mri_data, device='cpu') -> None:
+    def __init__(self, mri_data, k_sigma, k_intensity, tau, max_intensity=None, device='cpu') -> None:
         super(GaussianModel, self).__init__()
 
         self.device = device
         self.mri_data = torch.tensor(mri_data, dtype=torch.float, device=self.device, requires_grad=False)  # Ensure MRI data is a tensor but not trainable
-        self.max_intensity = self.mri_data.max()
+        self.max_intensity = max_intensity if max_intensity else self.mri_data.max()
         self.volume_shape = self.mri_data.shape
 
         # Calculate the scale factors to convert normalized coordinates back to volume indices
@@ -29,46 +29,58 @@ class GaussianModel(nn.Module):
             torch.linspace(0, 1, steps=mri_data.shape[2], device=self.device)
         ], indexing='ij'), dim=-1)  # Shape: [X, Y, Z, 3]
 
-        centers, sigmas, intensities = self.setup_functions()
+        centers, sigmas, intensities = self.setup_functions(k_sigma, k_intensity, tau)
         self.centers = nn.Parameter(centers.requires_grad_(True)).to(self.device)
         self.sigmas = nn.Parameter(sigmas.requires_grad_(True)).to(self.device)
         self.intensities = nn.Parameter(intensities.requires_grad_(True)).to(self.device)
 
-    def setup_functions(self):
+    def setup_functions(self, k_sigma, k_intensity, tau):
         logging.info("Initializing Gaussians")
         mri_volume = self.mri_data.cpu().numpy()
 
+        # Exclude empty spaces
+        mri_volume = np.where(mri_volume > tau, mri_volume, 0)
+
+        center_idxs, normalized_centers = self.get_gaussian_centers(mri_volume)
+
+        logging.info("Calculating gaussian radiuses")
+        sigmas = self.calculate_sigmas(normalized_centers)
+        sigmas = sigmas * k_sigma
+
+        logging.info("Intensities are calculated directly from the voxel values")
+        intensities = torch.tensor([mri_volume[tuple(center)] for center in center_idxs], device=self.device)
+        intensities = intensities * k_intensity
+
+        # Normalize intensities
+        intensities = intensities / self.max_intensity
+        self.mri_data = self.mri_data / self.max_intensity
+
+        assert len(normalized_centers) == len(sigmas) == len(intensities)
+
+        logging.info(f"Initial number of gaussians: {len(normalized_centers)}")
+
+        return normalized_centers, sigmas, intensities
+    
+    def get_gaussian_centers(self, mri_volume):
         logging.info("Compute gradient magnitude")
         grad_x, grad_y, grad_z = np.gradient(mri_volume)
         grad_magnitude = np.sqrt(grad_x**2 + grad_y**2 + grad_z**2)
 
-        logging.info("Filter out low gradients")
-        tau = grad_magnitude.mean()
-        filtered_grad_magnitude = np.where(grad_magnitude > tau, grad_magnitude, 0)
+        logging.info("Filter out voxels with low gradients")
+        # tau = grad_magnitude.mean()  # Example threshold
+        filtered_grad_magnitude = np.where(grad_magnitude > 0.05, grad_magnitude, 0)
 
         # Find Gaussian Centers Based on Gradient Magnitude
         logging.info("Select points with gradient magnitude around the median as centers")
         median_grad = np.median(filtered_grad_magnitude[filtered_grad_magnitude > 0])
-        close_to_median = np.abs(filtered_grad_magnitude - median_grad) < (0.5 * median_grad)
-        centers = np.argwhere(close_to_median)
-        centers_tensor = torch.tensor(centers, dtype=torch.long, device=self.device)
+        close_to_median = np.abs(filtered_grad_magnitude - median_grad) < (0.01 * median_grad)
+        center_idxs = np.argwhere(close_to_median)
+        centers_tensor = torch.tensor(center_idxs, dtype=torch.long, device=self.device)
 
         # Extract the normalized coordinates for each center
         normalized_centers = self.grid[centers_tensor[:, 0], centers_tensor[:, 1], centers_tensor[:, 2]]
 
-        logging.info("Calculating gaussian radiuses")
-        sigmas = self.calculate_sigmas(normalized_centers)
-
-        logging.info("Intensities are calculated directly from the voxel values")
-        intensities = torch.tensor([mri_volume[tuple(center)] for center in centers], device=self.device)
-        intensities = intensities / self.max_intensity
-        self.mri_data = self.mri_data / self.max_intensity
-
-        assert len(centers) == len(sigmas) == len(intensities)
-
-        logging.info(f"Initial number of gaussians: {len(centers)}")
-
-        return normalized_centers, sigmas, intensities
+        return center_idxs, normalized_centers
     
     def calculate_sigmas(self, normalized_centers):
         normalized_centers_np = normalized_centers.cpu().numpy()  # Make sure it's on CPU and convert to NumPy
@@ -138,12 +150,17 @@ class GaussianModel(nn.Module):
 
 
 def main():
-    lr_mri_path = '../../hcp1200/996782/T1w_acpc_dc_restore_brain_downsample_factor_4.nii.gz'
+    lr_mri_path = '../../hcp1200/996782/T1w_acpc_dc_restore_brain_downsample_factor_2.nii.gz'
     lr_mri = MRI.from_nii_file(lr_mri_path)
 
     device = get_device()
 
-    gm = GaussianModel(lr_mri.data)
+    k_sigma = 0.4
+    k_intensity = 0.4 
+    tau = 0.05 # threshold for excluding empty spaces
+    max_intensity = 1 # divide intensities by this value
+
+    gm = GaussianModel(lr_mri.data, k_sigma, k_intensity, tau, max_intensity)
     
     # Separate parameters into groups for different learning rates
     center_params = [gm.centers]
