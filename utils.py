@@ -49,8 +49,10 @@ def read_config():
     return config
 
 
-def save_reconstruction_comparison(lr_mri, pred_mri, gt_mri, file_path="images/comparison.png"):
-    logging.info("Saving comparison to images/comparison.png")
+def save_reconstruction_comparison(lr_mri, pred_mri, gt_mri, epoch):
+    file_path = f"images/comparison_epoch_{epoch}.png"
+    logging.info(f"Saving comparison to {file_path}")
+    
     lr_slice = lr_mri.data[lr_mri.data.shape[0] // 2, :, :]
     pred_slice = pred_mri.data[pred_mri.data.shape[0] // 2, :, :]
     gt_slice = gt_mri.data[gt_mri.data.shape[0] // 2, :, :]

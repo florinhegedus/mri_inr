@@ -78,7 +78,7 @@ class GaussianModel(nn.Module):
         # Find Gaussian Centers Based on Gradient Magnitude
         logging.info("Select points with gradient magnitude around the median as centers")
         median_grad = np.median(filtered_grad_magnitude[filtered_grad_magnitude > 0])
-        close_to_median = np.abs(filtered_grad_magnitude - median_grad) < (0.02 * median_grad)
+        close_to_median = np.abs(filtered_grad_magnitude - median_grad) < (0.05 * median_grad)
         center_idxs = np.argwhere(close_to_median)
         centers_tensor = torch.tensor(center_idxs, dtype=torch.long, device=self.device)
 
@@ -253,6 +253,18 @@ class GaussianModel(nn.Module):
         # Implement the loss function. For example, use Mean Squared Error (MSE) between the reconstructed volume and the original MRI data
         mse_loss = nn.MSELoss()
         return mse_loss(reconstructed_volume, self.mri_data)
+    
+
+def reconstruct(gm, lr_mri, epoch):
+    # Reconstruct volume
+    with torch.no_grad():
+        reconstructed_volume = gm.forward()
+        reconstructed_volume = reconstructed_volume * gm.max_intensity
+        reconstructed_volume = reconstructed_volume.numpy()
+        pred_mri = MRI.from_data_and_voxel_size(reconstructed_volume, reconstructed_volume.shape)
+    
+    evaluate(pred_mri, lr_mri)
+    save_reconstruction_comparison(lr_mri, pred_mri, lr_mri, epoch)
 
 
 def main():
@@ -264,12 +276,12 @@ def main():
     k_sigma = 0.4
     k_intensity = 0.4 
     tau = 0.05 # threshold for excluding empty spaces
-    N_max = 5000 # max number of gaussians
+    N_max = 25000 # max number of gaussians
     max_intensity = 1 # divide intensities by this value, None for dividing with max(intensities)
     adaptive_density_control = True
-    densify_frequency = 10
+    densify_frequency = 100
 
-    gm = GaussianModel(lr_mri.data, k_sigma, k_intensity, tau, N_max, max_intensity)
+    gm = GaussianModel(lr_mri.data, k_sigma, k_intensity, tau, N_max, max_intensity, device='cpu')
     
     # Separate parameters into groups for different learning rates
     center_params = [gm.centers]
@@ -282,7 +294,7 @@ def main():
     ], betas=(0.9, 0.999))
 
     # Define the number of epochs or iterations for optimization
-    num_epochs = 100
+    num_epochs = 5000
 
     # Define an exponential decay for the learning rate of centers
     lambda1 = lambda epoch: (2e-6 / 2e-4) ** (epoch / num_epochs)
@@ -304,20 +316,14 @@ def main():
         optimizer.step()  # Update parameters
         scheduler.step()
 
-        if epoch % densify_frequency == densify_frequency - 1 and adaptive_density_control and epoch < num_epochs / 2:
+        if epoch % densify_frequency == densify_frequency - 1 and adaptive_density_control:
+            reconstruct(gm, lr_mri, epoch)
             gm.adaptive_density_control()
 
         logging.info(f"Epoch {epoch}, Loss: {loss.item()}")
 
-    # Reconstruct volume
-    with torch.no_grad():
-        reconstructed_volume = gm.forward()
-        reconstructed_volume = reconstructed_volume * gm.max_intensity
-        reconstructed_volume = reconstructed_volume.numpy()
-        pred_mri = MRI.from_data_and_voxel_size(reconstructed_volume, reconstructed_volume.shape)
-    
-    evaluate(pred_mri, lr_mri)
-    save_reconstruction_comparison(lr_mri, pred_mri, lr_mri)
+    reconstruct(gm, lr_mri, num_epochs)
+
     return
 
 
