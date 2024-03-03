@@ -29,9 +29,9 @@ class GaussianModel(nn.Module):
             torch.linspace(0, 1, steps=mri_data.shape[2], device=self.device)
         ], indexing='ij'), dim=-1)  # Shape: [X, Y, Z, 3]
 
-        self.centers = nn.Parameter(torch.zeros(N_max, 3).requires_grad_(True)).to(self.device)
-        self.sigmas = nn.Parameter(torch.zeros(N_max).requires_grad_(True)).to(self.device)
-        self.intensities = nn.Parameter(torch.zeros(N_max).requires_grad_(True)).to(self.device)
+        self.centers = nn.Parameter(torch.zeros(N_max, 3, device=self.device, requires_grad=True))
+        self.sigmas = nn.Parameter(torch.zeros(N_max, device=self.device, requires_grad=True))
+        self.intensities = nn.Parameter(torch.zeros(N_max, device=self.device, requires_grad=True))
 
         centers, sigmas, intensities = self.setup_functions(k_sigma, k_intensity, tau)
 
@@ -127,16 +127,14 @@ class GaussianModel(nn.Module):
             max_idx = torch.min(center + cutoff, self.scale_factors)
 
             # Ensure indices are integers and within the volume bounds
-            min_x, min_y, min_z = min_idx.int().tolist()
-            max_x, max_y, max_z = (max_idx + 1).int().tolist()  # +1 to include the upper bound
+            min_idx = min_idx.int()
+            max_idx = (max_idx + 1).int()  # +1 to include the upper bound
 
             # Adjust max indices to ensure they do not exceed the volume shape
-            max_x = min(max_x, self.volume_shape[0])
-            max_y = min(max_y, self.volume_shape[1])
-            max_z = min(max_z, self.volume_shape[2])
+            max_idx = torch.min(max_idx, torch.tensor(self.volume_shape, device=self.device, dtype=torch.int))
 
             # Use integer indices to slice the grid
-            local_grid = self.grid[min_x:max_x, min_y:max_y, min_z:max_z, :]
+            local_grid = self.grid[min_idx[0]:max_idx[0], min_idx[1]:max_idx[1], min_idx[2]:max_idx[2], :]
 
             # Compute the squared distance from each point in the local grid to the Gaussian center
             distance_squared = torch.sum((local_grid - center_norm) ** 2, dim=-1)
@@ -145,7 +143,7 @@ class GaussianModel(nn.Module):
             contribution = intensity * torch.exp(-0.5 * distance_squared / (sigma ** 2))
 
             # Update the volume with the contribution of the current Gaussian within the neighborhood
-            volume[min_x:max_x, min_y:max_y, min_z:max_z] += contribution
+            volume[min_idx[0]:max_idx[0], min_idx[1]:max_idx[1], min_idx[2]:max_idx[2]] += contribution
 
         return volume
     
@@ -281,7 +279,7 @@ def main():
     adaptive_density_control = True
     densify_frequency = 100
 
-    gm = GaussianModel(lr_mri.data, k_sigma, k_intensity, tau, N_max, max_intensity, device='cpu')
+    gm = GaussianModel(lr_mri.data, k_sigma, k_intensity, tau, N_max, max_intensity, device=device)
     
     # Separate parameters into groups for different learning rates
     center_params = [gm.centers]
